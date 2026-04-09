@@ -20,9 +20,7 @@ export default async function handler(req, res) {
         client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
         private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
       },
-      scopes: [
-        "https://www.googleapis.com/auth/drive.readonly",
-      ],
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
     });
 
     // User auth - to create doc in their Drive
@@ -35,14 +33,17 @@ export default async function handler(req, res) {
 
     // Step 1: Export template as docx from service account
     const exported = await serviceDrive.files.export(
-      { fileId: TEMPLATE_DOC_ID, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+      {
+        fileId: TEMPLATE_DOC_ID,
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      },
       { responseType: "arraybuffer" }
     );
 
     // Step 2: Upload to user's Drive as Google Doc
     const docTitle = `${brandName} - MSA`;
-    const { Readable } = await import("stream");
-    const stream = Readable.from(Buffer.from(exported.data));
+    const buffer = Buffer.from(exported.data);
+    const stream = require("stream").Readable.from(buffer);
 
     const uploaded = await userDrive.files.create({
       requestBody: {

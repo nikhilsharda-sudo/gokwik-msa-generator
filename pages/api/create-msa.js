@@ -2,7 +2,6 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { google } from "googleapis";
 
-// Your master MSA template Google Doc ID
 const TEMPLATE_DOC_ID = "1iFBATTwIerLx2G03DDMW8tioi73r4ioJNFNeDoJbLjI";
 
 export default async function handler(req, res) {
@@ -19,19 +18,71 @@ export default async function handler(req, res) {
     auth.setCredentials({ access_token: session.accessToken });
 
     const drive = google.drive({ version: "v3", auth });
+    const docs = google.docs({ version: "v1", auth });
 
     // 1. Copy the master template doc
     const docTitle = `${brandName} - MSA`;
     const copied = await drive.files.copy({
       fileId: TEMPLATE_DOC_ID,
-      requestBody: {
-        name: docTitle,
-      },
+      requestBody: { name: docTitle },
     });
-
     const newDocId = copied.data.id;
 
-    // 2. Set permission: anyone with link can EDIT
+    // 2. Get the document to find the header ID
+    const docData = await docs.documents.get({ documentId: newDocId });
+    const headers = docData.data.headers;
+
+    // Get the first header ID
+    const headerIds = Object.keys(headers || {});
+
+    if (headerIds.length > 0) {
+      const headerId = headerIds[0];
+      const headerContent = headers[headerId].content;
+
+      // Find the text element containing "Brand Name" in the header
+      for (const block of headerContent) {
+        if (!block.paragraph) continue;
+        for (const el of block.paragraph.elements) {
+          if (!el.textRun) continue;
+          const text = el.textRun.content;
+          if (text.includes("Brand Name")) {
+            const startIndex = el.startIndex;
+            const endIndex = el.endIndex;
+            const newText = text.replace("Brand Name", brandName);
+
+            // Replace only this specific text element in the header
+            await docs.documents.batchUpdate({
+              documentId: newDocId,
+              requestBody: {
+                requests: [
+                  {
+                    deleteContentRange: {
+                      range: {
+                        startIndex,
+                        endIndex: endIndex - 1, // exclude trailing newline
+                        segmentId: headerId,
+                      },
+                    },
+                  },
+                  {
+                    insertText: {
+                      location: {
+                        index: startIndex,
+                        segmentId: headerId,
+                      },
+                      text: newText.replace(/\n$/, ""),
+                    },
+                  },
+                ],
+              },
+            });
+            break;
+          }
+        }
+      }
+    }
+
+    // 3. Set permission: anyone with link can EDIT
     await drive.permissions.create({
       fileId: newDocId,
       requestBody: {
@@ -40,7 +91,7 @@ export default async function handler(req, res) {
       },
     });
 
-    // 3. Return the shareable link
+    // 4. Return the shareable link
     const shareableLink = `https://docs.google.com/document/d/${newDocId}/edit?usp=sharing`;
     return res.status(200).json({ url: shareableLink, title: docTitle });
 

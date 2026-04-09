@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { google } from "googleapis";
 
-const TEMPLATE_DOC_ID = "1iFBATTwIerLx2G03DDMW8tioi73r4ioJNFNeDoJbLjI";
+const TEMPLATE_DOC_ID = "1AW63kWewbhq_WSccVx0M_9e9FcmpfWFgqgW4OjO0Ebo";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();

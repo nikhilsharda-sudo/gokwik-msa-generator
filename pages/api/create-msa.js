@@ -14,8 +14,8 @@ export default async function handler(req, res) {
   if (!brandName) return res.status(400).json({ error: "Brand name required" });
 
   try {
-    // Use service account instead of user token
-    const auth = new google.auth.GoogleAuth({
+    // Step 1: Use service account to copy the template
+    const serviceAuth = new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
         private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
@@ -26,19 +26,19 @@ export default async function handler(req, res) {
       ],
     });
 
-    const drive = google.drive({ version: "v3", auth });
-    const docs = google.docs({ version: "v1", auth });
+    const serviceDrive = google.drive({ version: "v3", auth: serviceAuth });
+    const serviceDocs = google.docs({ version: "v1", auth: serviceAuth });
 
-    // 1. Copy the master template doc
+    // Copy the template
     const docTitle = `${brandName} - MSA`;
-    const copied = await drive.files.copy({
+    const copied = await serviceDrive.files.copy({
       fileId: TEMPLATE_DOC_ID,
       requestBody: { name: docTitle },
     });
     const newDocId = copied.data.id;
 
-    // 2. Replace "Brand Name" only in the header
-    const docData = await docs.documents.get({ documentId: newDocId });
+    // Replace "Brand Name" in header only
+    const docData = await serviceDocs.documents.get({ documentId: newDocId });
     const headers = docData.data.headers;
     const headerIds = Object.keys(headers || {});
 
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
             const endIndex = el.endIndex;
             const newText = text.replace("Brand Name", brandName);
 
-            await docs.documents.batchUpdate({
+            await serviceDocs.documents.batchUpdate({
               documentId: newDocId,
               requestBody: {
                 requests: [
@@ -87,8 +87,19 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. Set permission: anyone with link can EDIT
-    await drive.permissions.create({
+    // Step 2: Transfer ownership to the logged-in user
+    await serviceDrive.permissions.create({
+      fileId: newDocId,
+      requestBody: {
+        role: "owner",
+        type: "user",
+        emailAddress: session.user.email,
+      },
+      transferOwnership: true,
+    });
+
+    // Step 3: Set anyone with link can edit
+    await serviceDrive.permissions.create({
       fileId: newDocId,
       requestBody: {
         role: "writer",
@@ -96,7 +107,7 @@ export default async function handler(req, res) {
       },
     });
 
-    // 4. Return the shareable link
+    // Return the shareable link
     const shareableLink = `https://docs.google.com/document/d/${newDocId}/edit?usp=sharing`;
     return res.status(200).json({ url: shareableLink, title: docTitle });
 

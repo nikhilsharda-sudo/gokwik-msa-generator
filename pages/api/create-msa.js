@@ -14,31 +14,51 @@ export default async function handler(req, res) {
   if (!brandName) return res.status(400).json({ error: "Brand name required" });
 
   try {
-    // Step 1: Use service account to copy the template
+    // Service account auth - to read the template
     const serviceAuth = new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
         private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
       },
       scopes: [
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive.readonly",
       ],
     });
 
+    // User auth - to create doc in their Drive
+    const userAuth = new google.auth.OAuth2();
+    userAuth.setCredentials({ access_token: session.accessToken });
+
     const serviceDrive = google.drive({ version: "v3", auth: serviceAuth });
-    const serviceDocs = google.docs({ version: "v1", auth: serviceAuth });
+    const userDrive = google.drive({ version: "v3", auth: userAuth });
+    const userDocs = google.docs({ version: "v1", auth: userAuth });
 
-    // Copy the template
+    // Step 1: Export template as docx from service account
+    const exported = await serviceDrive.files.export(
+      { fileId: TEMPLATE_DOC_ID, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+      { responseType: "arraybuffer" }
+    );
+
+    // Step 2: Upload to user's Drive as Google Doc
     const docTitle = `${brandName} - MSA`;
-    const copied = await serviceDrive.files.copy({
-      fileId: TEMPLATE_DOC_ID,
-      requestBody: { name: docTitle },
-    });
-    const newDocId = copied.data.id;
+    const { Readable } = await import("stream");
+    const stream = Readable.from(Buffer.from(exported.data));
 
-    // Replace "Brand Name" in header only
-    const docData = await serviceDocs.documents.get({ documentId: newDocId });
+    const uploaded = await userDrive.files.create({
+      requestBody: {
+        name: docTitle,
+        mimeType: "application/vnd.google-apps.document",
+      },
+      media: {
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        body: stream,
+      },
+    });
+
+    const newDocId = uploaded.data.id;
+
+    // Step 3: Replace "Brand Name" in header only
+    const docData = await userDocs.documents.get({ documentId: newDocId });
     const headers = docData.data.headers;
     const headerIds = Object.keys(headers || {});
 
@@ -56,7 +76,7 @@ export default async function handler(req, res) {
             const endIndex = el.endIndex;
             const newText = text.replace("Brand Name", brandName);
 
-            await serviceDocs.documents.batchUpdate({
+            await userDocs.documents.batchUpdate({
               documentId: newDocId,
               requestBody: {
                 requests: [
@@ -87,19 +107,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // Step 2: Transfer ownership to the logged-in user
-    await serviceDrive.permissions.create({
-      fileId: newDocId,
-      requestBody: {
-        role: "owner",
-        type: "user",
-        emailAddress: session.user.email,
-      },
-      transferOwnership: true,
-    });
-
-    // Step 3: Set anyone with link can edit
-    await serviceDrive.permissions.create({
+    // Step 4: Set anyone with link can edit
+    await userDrive.permissions.create({
       fileId: newDocId,
       requestBody: {
         role: "writer",
@@ -107,7 +116,6 @@ export default async function handler(req, res) {
       },
     });
 
-    // Return the shareable link
     const shareableLink = `https://docs.google.com/document/d/${newDocId}/edit?usp=sharing`;
     return res.status(200).json({ url: shareableLink, title: docTitle });
 

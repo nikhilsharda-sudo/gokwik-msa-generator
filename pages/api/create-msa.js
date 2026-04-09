@@ -14,8 +14,17 @@ export default async function handler(req, res) {
   if (!brandName) return res.status(400).json({ error: "Brand name required" });
 
   try {
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: session.accessToken });
+    // Use service account instead of user token
+    const auth = new google.auth.GoogleAuth({
+      credentials: {
+        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      },
+      scopes: [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/documents",
+      ],
+    });
 
     const drive = google.drive({ version: "v3", auth });
     const docs = google.docs({ version: "v1", auth });
@@ -28,18 +37,15 @@ export default async function handler(req, res) {
     });
     const newDocId = copied.data.id;
 
-    // 2. Get the document to find the header ID
+    // 2. Replace "Brand Name" only in the header
     const docData = await docs.documents.get({ documentId: newDocId });
     const headers = docData.data.headers;
-
-    // Get the first header ID
     const headerIds = Object.keys(headers || {});
 
     if (headerIds.length > 0) {
       const headerId = headerIds[0];
       const headerContent = headers[headerId].content;
 
-      // Find the text element containing "Brand Name" in the header
       for (const block of headerContent) {
         if (!block.paragraph) continue;
         for (const el of block.paragraph.elements) {
@@ -50,7 +56,6 @@ export default async function handler(req, res) {
             const endIndex = el.endIndex;
             const newText = text.replace("Brand Name", brandName);
 
-            // Replace only this specific text element in the header
             await docs.documents.batchUpdate({
               documentId: newDocId,
               requestBody: {
@@ -59,7 +64,7 @@ export default async function handler(req, res) {
                     deleteContentRange: {
                       range: {
                         startIndex,
-                        endIndex: endIndex - 1, // exclude trailing newline
+                        endIndex: endIndex - 1,
                         segmentId: headerId,
                       },
                     },
